@@ -1,0 +1,12 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+.env
+*.db
+*.db-journal
+.dockerignore
+Dockerfile
+build.sh
+run.sh
+README.md
