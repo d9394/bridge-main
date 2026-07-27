@@ -1,0 +1,86 @@
+bridge:
+  name: "ilink-bridge"
+  log_level: "INFO"
+  debug: true
+  storage_dir: ".ilink-bridge"
+  log:
+    file: "bridge.log"
+    level: "INFO"
+    max_size_mb: 10
+    backup_count: 5
+
+plugins:
+  ilink_main:
+    mode: "upstream"
+    type: "ilink"
+    name: "iLink WeChat"
+    enabled: true
+    app_secret: "xxxxxxxxxx"
+    app_version: 1
+    capabilities: ["text", "chat", "files", "image", "voice", "video"]
+    auto_launch:
+      command: "python /app/plugins/ilink_plugin/connector.py"
+      workdir: "/app"
+      restart: on-failure
+
+  synology_main:
+    mode: "upstream"
+    type: "synology"
+    name: "Synology Chat"
+    enabled: true
+    app_secret: "xxxxxxxxx"
+    app_version: 1
+    capabilities: ["text", "chat"]
+    auto_launch:
+      command: "python /app/plugins/synology_plugin/connector.py"
+      workdir: "/app"
+      restart: on-failure
+
+  opencode_main:
+    mode: "downstream"
+    type: "opencode"
+    name: "OpenCode Main"
+    enabled: true
+    app_secret: "xxxxxxxxxx"
+    app_version: 1
+    alias: "oc1"
+    capabilities: ["text", "chat", "files", "image"]
+
+  opencode_win10:
+    mode: "downstream"
+    type: "opencode"
+    name: "OpenCode Windows 10"
+    enabled: true
+    app_secret: "xxxxxxxx"
+    app_version: 1
+    alias: "oc2"
+    capabilities: ["text", "chat", "files", "image"]
+
+  hermes_a30:
+    mode: "downstream"
+    type: "hermes"
+    name: "Hermes Agent @ a30"
+    enabled: true
+    app_secret: "xxxxxx"
+    app_version: 1
+    alias: "ha30"
+    capabilities: ["text", "chat", "files", "image", "voice", "video"]
+
+routing:
+  default_downstream: "opencode_main"
+
+ws_server:
+  host: "0.0.0.0"
+  port: 8765
+
+heartbeat:
+  interval_seconds: 60
+  timeout_seconds: 300
+
+file_cache:
+  enabled: true
+  cache_dir: cache/files
+  max_days: 14
+  download_base_url: "http://test.comt:8765"
+  cleanup_interval: 3600
+  max_file_size: 52428800
