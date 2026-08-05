@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Callable, Awaitable, Optional
 
 from aiohttp import web
@@ -32,6 +33,7 @@ class WSServer:
         sec_logger: SecurityLogger = None,
         log_fn: Callable[[str], None] = None,
         file_cache=None,
+        platform=None,
     ):
         self.host = host
         self.port = port
@@ -40,6 +42,7 @@ class WSServer:
         self.upstream_mgr = upstream_mgr
         self.sec_logger = sec_logger
         self.file_cache = file_cache
+        self.platform = platform
         self.log = log_fn or (lambda msg: print(f"[ws-server] {msg}"))
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
@@ -53,6 +56,13 @@ class WSServer:
         if self.file_cache:
             self._app.router.add_get("/api/file/{file_id}", self._handle_file_download)
             self._app.router.add_get("/api/file/{file_id}/info", self._handle_file_info)
+
+        self._app.router.add_get("/api/msg/read/{token}", self._handle_msg_read)
+        self._app.router.add_get("/api/msg/read/{token}/", self._handle_msg_read)
+        self._app.router.add_get("/api/msg/read/{token}/{n}", self._handle_msg_read)
+        self._app.router.add_get("/api/msg/read/{token}/{n}/", self._handle_msg_read)
+        self._app.router.add_get("/api/msg/send/{token}/{msg}", self._handle_msg_send)
+        self._app.router.add_get("/api/msg/send/{token}/{msg}/", self._handle_msg_send)
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -275,3 +285,90 @@ class WSServer:
         if not meta:
             return web.json_response({"error": "file not found"}, status=404)
         return web.json_response(meta)
+
+    def _get_buffer(self, plugin_id: str) -> list:
+        if not self.platform:
+            return []
+        buf = self.platform._ds_msg_buffer.get(plugin_id)
+        return list(buf) if buf else []
+
+    async def _handle_msg_read(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        n = request.match_info.get("n", "1")
+        try:
+            n = int(n)
+        except ValueError:
+            return web.json_response(
+                {"ok": False, "error": "n must be an integer"}, status=400
+            )
+        if n < 1:
+            return web.json_response(
+                {"ok": False, "error": "n must be >= 1"}, status=400
+            )
+
+        plugin = await self.db.get_plugin_by_secret(token)
+        if not plugin:
+            return web.json_response(
+                {"ok": False, "error": "unknown token"}, status=404
+            )
+
+        buffer = self._get_buffer(plugin["id"])
+        total = len(buffer)
+        if total == 0:
+            return web.json_response(
+                {"ok": True, "total": 0, "message": None}
+            )
+        if n > total:
+            return web.json_response(
+                {"ok": False, "error": "index out of range", "total": total},
+                status=404,
+            )
+
+        return web.json_response(
+            {"ok": True, "total": total, "n": n, "message": buffer[-n]}
+        )
+
+    async def _handle_msg_send(self, request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        msg = request.match_info["msg"]
+        if not msg:
+            return web.json_response(
+                {"ok": False, "error": "empty message"}, status=400
+            )
+
+        plugin = await self.db.get_plugin_by_secret(token)
+        if not plugin:
+            return web.json_response(
+                {"ok": False, "error": "unknown token"}, status=404
+            )
+        if self.platform is None:
+            return web.json_response(
+                {"ok": False, "error": "platform not available"}, status=500
+            )
+
+        buffer = self._get_buffer(plugin["id"])
+        if buffer:
+            last = buffer[-1]
+            target_user = last.get("from") or last.get("from_user", "")
+        else:
+            target_user = self.platform._last_upstream_user if self.platform else None
+        if not target_user:
+            target_user = await self.db.get_last_inbound_user()
+        if not target_user:
+            return web.json_response(
+                {"ok": False, "error": "no conversation to reply to"}, status=404
+            )
+
+        data = {
+            "type": "message.send",
+            "to": target_user,
+            "content": msg,
+            "message_type": "text",
+            "request_id": f"http_{int(time.time() * 1000)}",
+        }
+        success = await self.platform._on_downstream_message(plugin["id"], data)
+        if success:
+            return web.json_response({"ok": True, "to": target_user})
+        return web.json_response(
+            {"ok": False, "error": "send failed"}, status=502
+        )
