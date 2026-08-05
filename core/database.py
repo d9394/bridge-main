@@ -170,6 +170,22 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def get_plugin_by_secret(self, app_secret: str) -> Optional[dict]:
+        cursor = await self._db.execute(
+            "SELECT * FROM plugins WHERE app_secret = ? AND mode = 'downstream'",
+            (app_secret,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_last_inbound_user(self) -> Optional[str]:
+        cursor = await self._db.execute(
+            "SELECT upstream_user_id FROM messages "
+            "WHERE direction = 'inbound' ORDER BY id DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return row["upstream_user_id"] if row else None
+
     async def get_downstreams(self) -> list[dict]:
         cursor = await self._db.execute(
             "SELECT * FROM plugins WHERE mode = 'downstream' ORDER BY name"

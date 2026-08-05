@@ -5,6 +5,7 @@ import base64
 import os
 import subprocess
 import time
+from collections import deque
 from typing import Optional
 
 from core.database import Database
@@ -80,6 +81,7 @@ class BridgePlatform:
             sec_logger=self.sec_logger,
             log_fn=self.sec_logger.info,
             file_cache=self.file_cache,
+            platform=self,
         )
 
         self.cmd_handler = BridgeCommands(
@@ -90,7 +92,11 @@ class BridgePlatform:
             db=self.db,
         )
 
+        self._ds_msg_buffer: dict[str, deque] = {}
+        self._ds_buffer_max = 200
+
         self._user_upstream_map: dict[str, str] = {}
+        self._last_upstream_user: Optional[str] = None
         self._plugin_processes: dict[str, subprocess.Popen] = {}
         self._last_context_tokens: dict[str, str] = {}
         self._active_upstream: Optional[str] = None
@@ -294,6 +300,7 @@ class BridgePlatform:
         if context_token:
             self._last_context_tokens[from_user] = context_token
         self._user_upstream_map[from_user] = upstream_id
+        self._last_upstream_user = from_user
 
         self.sec_logger.info(
             f"Upstream({upstream_id}) inbound from {from_user}: {content[:100]}"
@@ -360,6 +367,11 @@ class BridgePlatform:
         if files:
             msg_dict["files"] = files
 
+        buf = self._ds_msg_buffer.setdefault(
+            downstream_id, deque(maxlen=self._ds_buffer_max)
+        )
+        buf.append(dict(msg_dict))
+
         success = await self.downstream_mgr.send_raw_to_downstream(downstream_id, msg_dict)
         if not success:
             await self.upstream_mgr.send_to_upstream(upstream_id, {
@@ -376,7 +388,7 @@ class BridgePlatform:
         target_user = data.get("to", "")
 
         if not target_user:
-            return
+            return False
 
         now = time.time()
         request_id = data.get("request_id", "")
@@ -385,7 +397,7 @@ class BridgePlatform:
                 self.sec_logger.info(
                     f"Dedup: dropped duplicate request_id={request_id} to {target_user} from {app_id}"
                 )
-                return
+                return False
             self._dedup_cache[request_id] = now
 
         content = data.get("content", "")
@@ -396,7 +408,7 @@ class BridgePlatform:
                 self.sec_logger.info(
                     f"Dedup: dropped duplicate content to {target_user} from {app_id}: {content[:40]}"
                 )
-                return
+                return False
             self._dedup_cache[dedup_key] = now
 
         expired = [k for k, t in self._dedup_cache.items() if now - t > self._dedup_window * 2]
@@ -414,11 +426,11 @@ class BridgePlatform:
                 self.sec_logger.warn(
                     f"No upstream available for downstream reply to {target_user}"
                 )
-                return
+                return False
 
         if msg_type == "file.send" and not self._plugin_has_capability(upstream_id, "files"):
             await self._handle_file_degradation(upstream_id, target_user, data)
-            return
+            return True
 
         modified_data = dict(data)
         content = data.get("content", "")
@@ -437,6 +449,7 @@ class BridgePlatform:
                 data.get("message_type", msg_type),
                 data.get("content", ""),
             )
+        return success
 
     def _plugin_has_capability(self, plugin_id: str, cap: str) -> bool:
         plugin = self.config.plugins.get(plugin_id)
