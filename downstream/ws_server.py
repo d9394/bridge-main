@@ -313,7 +313,9 @@ class WSServer:
             )
 
         buffer = self._get_buffer(plugin["id"])
-        total = len(buffer)
+        read_seq = self.platform._ds_read_seq.get(plugin["id"], 0) if self.platform else 0
+        unread = [m for m in buffer if m.get("seq", 0) > read_seq]
+        total = len(unread)
         if total == 0:
             return web.json_response(
                 {"ok": True, "total": 0, "message": None}
@@ -324,8 +326,14 @@ class WSServer:
                 status=404,
             )
 
+        message = unread[n - 1]
+        if self.platform:
+            self.platform._ds_read_seq[plugin["id"]] = max(
+                read_seq, message.get("seq", read_seq)
+            )
+
         return web.json_response(
-            {"ok": True, "total": total, "n": n, "message": buffer[-n]}
+            {"ok": True, "total": total - n, "n": n, "message": message}
         )
 
     async def _handle_msg_send(self, request: web.Request) -> web.Response:
