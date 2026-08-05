@@ -94,6 +94,8 @@ class BridgePlatform:
 
         self._ds_msg_buffer: dict[str, deque] = {}
         self._ds_buffer_max = 200
+        self._ds_msg_seq: dict[str, int] = {}
+        self._ds_read_seq: dict[str, int] = {}
 
         self._user_upstream_map: dict[str, str] = {}
         self._last_upstream_user: Optional[str] = None
@@ -370,6 +372,9 @@ class BridgePlatform:
         buf = self._ds_msg_buffer.setdefault(
             downstream_id, deque(maxlen=self._ds_buffer_max)
         )
+        seq = self._ds_msg_seq.get(downstream_id, 0) + 1
+        self._ds_msg_seq[downstream_id] = seq
+        msg_dict["seq"] = seq
         buf.append(dict(msg_dict))
 
         success = await self.downstream_mgr.send_raw_to_downstream(downstream_id, msg_dict)
